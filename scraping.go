@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/gocolly/colly"
 
+	"github.com/PuerkitoBio/goquery"
 	emoji "github.com/tmdvs/Go-Emoji-Utils"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -26,6 +28,11 @@ type (
 		text    string
 		link    string
 		comment string
+	}
+	scrapComment struct {
+		text      string
+		author    string
+		commentNo string
 	}
 )
 
@@ -96,6 +103,21 @@ func setTargetURL(t *string) {
 		}
 
 		break
+	case "get-comment":
+		roomID := os.Args[2]
+		room, _ := strconv.Atoi(roomID)
+		var content []postjung.Content
+		if err := db.Find(&content).Where("comment_count > 0 AND room_id = ?", room).Error; err != nil {
+			log.Fatalln(err)
+		}
+		for _, r := range content {
+			chGetComment := make(chan scrapComment, chBuf)
+			// chGetCommentIsDone := make(chan bool, chBuf)
+			log.Println(cyan("content "), r.Permalink)
+			findAllCommentFromLink(r.Cid, r.Permalink, chGetComment)
+			log.Println(cyan("Hello"), <-chGetComment)
+		}
+		break
 	case "test":
 		var forum postjung.Forum
 		if err := db.Find(&forum).Error; err != nil {
@@ -104,6 +126,94 @@ func setTargetURL(t *string) {
 		log.Println(green(forum))
 		break
 	}
+}
+
+func findAllCommentFromLink(contentId int, link string, ch chan<- scrapComment) {
+	findComment := postjung.Scraping{colly.NewCollector()}
+	findComment.Scraping(link, "body > div.mainbox", "script:nth-child(9)", func(_ int, elem *colly.HTMLElement) {
+		js := strings.ReplaceAll(strings.ReplaceAll(elem.Text, "var cmnvar=", ""), ";", "")
+		ch <- scrapComment{}
+		comments := postjung.Comment{}
+		json.Unmarshal([]byte(js), &comments)
+		param := "?cmkey=" + comments.Cmkey + "&owner=" + strconv.Itoa(comments.Owner) + "&page=0&notop=1&noadd=1&maxlist=10&adsense_allow=1&adsense_allow_ns=1"
+
+		res, err := http.Get(postjung.SiteConfig["comments"] + param)
+		if err != nil {
+			log.Fatal(err)
+		}
+		scrapingHTMLFromData(contentId, link, res)
+
+	})
+	defer close(ch)
+}
+
+func scrapingHTMLFromData(contentId int, link string, res *http.Response) {
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	doc.Find("div.cm").Each(func(i int, s *goquery.Selection) {
+		log.Println(cyan("comment"), s)
+		author := s.Find(".cm > div.xbody > a.xname").Text()
+		comment := s.Find(".cm > div.xbody > div.xtext").Text()
+		publistDate := s.Find(".cm > div.xbody > a.xtoolbt")
+		onclickAttr, _ := publistDate.Attr("onclick")
+		onclickAttr = strings.ReplaceAll(strings.ReplaceAll(onclickAttr, "cmn.tool(this,", ""), "); return false;", "")
+		commentDate := postjung.CommentDate{}
+		json.Unmarshal([]byte(onclickAttr), &commentDate)
+
+		insertComment := postjung.CommentContent{
+			Content:       emoji.RemoveAll(comment),
+			CommentDate:   commentDate.Unixtime,
+			Permalink:     link,
+			WebsiteDomain: postjung.SiteConfig["site"],
+			CommentType:   "comment",
+			Author:        author,
+			ContentId:     contentId,
+			ViewCount:     0,
+			CommentCount:  0,
+			Tags:          "",
+			PictureUrls:   "",
+			CreateDate:    time.Now(),
+			UpdateDate:    time.Now(),
+		}
+		result := db.Create(&insertComment)
+		log.Println("result", result)
+		s.Find(".cm > div.xbody > div.reps > div.rep").Each(func(j int, e *goquery.Selection) {
+			ed := e.Find("div.rep > a.xtoolbt")
+			edAttr, _ := ed.Attr("onclick")
+			repsContent := e.Find("div.rep > div.reptext").Text()
+			edAttr = strings.ReplaceAll(strings.ReplaceAll(edAttr, "cmn.tool(this,", ""), "); return false;", "")
+			repsDate := postjung.CommentDate{}
+			json.Unmarshal([]byte(edAttr), &repsDate)
+			log.Println(cyan("reps"), repsDate, repsContent)
+
+			insertReps := postjung.CommentContent{
+				Content:       emoji.RemoveAll(repsContent),
+				CommentDate:   repsDate.Unixtime,
+				Permalink:     link,
+				WebsiteDomain: postjung.SiteConfig["site"],
+				CommentType:   "reps",
+				Author:        strconv.Itoa(repsDate.Userid),
+				ContentId:     contentId,
+				ViewCount:     0,
+				CommentCount:  0,
+				Tags:          "",
+				PictureUrls:   "",
+				CreateDate:    time.Now(),
+				UpdateDate:    time.Now(),
+			}
+			result := db.Create(&insertReps)
+			log.Println("result", result)
+
+		})
+
+		log.Println(cyan("comment"), author, comment, commentDate)
+
+	})
+	defer func() {
+		res.Body.Close()
+	}()
 }
 
 func getContentsFromTopic(ch <-chan scrapTopic, done chan bool, roomID string) {
@@ -171,7 +281,8 @@ func getContentsFromTopic(ch <-chan scrapTopic, done chan bool, roomID string) {
 				UpdateDate:    time.Now(),
 			}
 			// log.Println(cyan("content"), content)
-			content.InsertToDB(db)
+			result := db.Create(&content)
+			log.Println("result", result)
 		})
 
 	}
@@ -221,7 +332,8 @@ func findForumRoom(link string) {
 			TotalPage: i,
 			RoomId:    RID,
 		}
-		forum.InsertToDB(db)
+		result := db.Create(&forum)
+		log.Println("result", result)
 	})
 }
 
