@@ -1,6 +1,7 @@
 package postjung
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gocolly/colly"
@@ -15,24 +16,24 @@ type (
 		// FID       int    `gorm:"type:int(10);autoIncrement"`
 		Fid       int    `gorm:"primaryKey"`
 		RoomId    int    `gorm:"type:Int(10)"`
-		RoomName  string `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
+		RoomName  string `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
 		TotalPage int    `gorm:"type:Int(10)"`
 	}
 	Content struct {
 		Cid           int       `gorm:"primaryKey"`
 		RoomId        int       `gorm:"type:Int(10)"`
-		Title         string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		Content       string    `gorm:"type:Text CHARACTER SET utf8 COLLATE utf8_general_ci"`
+		Title         string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		Content       string    `gorm:"type:Text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
 		CreateDate    string    `gorm:"type:Date"`
-		Permalink     string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		WebsiteDomain string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		MessageType   string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		WebsiteType   string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		Author        string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
+		Permalink     string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		WebsiteDomain string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		MessageType   string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		WebsiteType   string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		Author        string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
 		ViewCount     int       `gorm:"type:Int(10)"`
 		CommentCount  int       `gorm:"type:Int(10)"`
-		Tags          string    `gorm:"type:Text CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		PictureUrls   string    `gorm:"type:Text CHARACTER SET utf8 COLLATE utf8_general_ci"`
+		Tags          string    `gorm:"type:Text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		PictureUrls   string    `gorm:"type:Text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
 		ImportDate    time.Time `gorm:"type:Date"`
 		UpdateDate    time.Time `gorm:"type:Date"`
 	}
@@ -59,17 +60,17 @@ type (
 	}
 	CommentContent struct {
 		Cid           uint      `gorm:"primaryKey"`
-		Content       string    `gorm:"type:Text CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		CommentDate   string    `gorm:"type:VARCHAR(50) CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		Permalink     string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		WebsiteDomain string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		CommentType   string    `gorm:"type:VARCHAR(20) CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		Author        string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_general_ci"`
+		Content       string    `gorm:"type:Text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		CommentDate   string    `gorm:"type:VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		Permalink     string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		WebsiteDomain string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		CommentType   string    `gorm:"type:VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		Author        string    `gorm:"type:VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
 		ContentId     int       `gorm:"type:Int(10)"`
 		ViewCount     int       `gorm:"type:Int(10)"`
 		CommentCount  int       `gorm:"type:Int(10)"`
-		Tags          string    `gorm:"type:Text CHARACTER SET utf8 COLLATE utf8_general_ci"`
-		PictureUrls   string    `gorm:"type:Text CHARACTER SET utf8 COLLATE utf8_general_ci"`
+		Tags          string    `gorm:"type:Text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
+		PictureUrls   string    `gorm:"type:Text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"`
 		CreateDate    time.Time `gorm:"type:Date"`
 		UpdateDate    time.Time `gorm:"type:Date"`
 	}
@@ -88,4 +89,20 @@ func (s *Scraping) Scraping(url string, findSelector string, useSelector string,
 		e.ForEach(useSelector, p)
 	})
 	s.Collector.Visit(url)
+}
+
+func (s *Scraping) ScrapingCount(url string, findSelector string, useSelector string) string {
+	var total string
+	s.Collector.OnHTML(findSelector, func(e *colly.HTMLElement) {
+		var hrefText []string
+		e.ForEach(useSelector, func(_ int, elem *colly.HTMLElement) {
+			// log.Println("total ", elem.Text)
+			hrefText = append(hrefText, elem.Text)
+		})
+		//log.Println("hrefText", hrefText[len(hrefText)-2:len(hrefText)-1])
+		total = strings.Join(hrefText[len(hrefText)-2:len(hrefText)-1], "")
+		//log.Println("total", total)
+	})
+	s.Collector.Visit(url)
+	return total
 }
