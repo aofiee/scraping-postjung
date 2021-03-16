@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	chBuf = 5
+	chBuf = 20
 )
 
 type (
@@ -54,7 +54,7 @@ var (
 func main() {
 	log.SetFlags(log.Ltime)
 	if arg() {
-		dsn := "root:helloworld@tcp(127.0.0.1:3306)/postjung?charset=utf8&parseTime=True&loc=Local"
+		dsn := "root:helloworld@tcp(127.0.0.1:3306)/postjung?charset=utf8mb4&parseTime=True&loc=Local"
 		db, dbError = gorm.Open(mysql.Open(dsn), &gorm.Config{})
 		if dbError != nil {
 			log.Fatal(dbError)
@@ -88,7 +88,7 @@ func setTargetURL(t *string) {
 			log.Println(green("Room id : "), strconv.Itoa(r.RoomId)+" "+red(r.RoomName))
 		}
 		break
-	case "gettopic":
+	case "get-topic":
 		roomID := os.Args[2]
 		var forum postjung.Forum
 		if err := db.Where("room_id = ?", roomID).First(&forum).Error; err != nil {
@@ -114,8 +114,8 @@ func setTargetURL(t *string) {
 			chGetComment := make(chan scrapComment, chBuf)
 			// chGetCommentIsDone := make(chan bool, chBuf)
 			log.Println(cyan("content "), r.Permalink)
-			findAllCommentFromLink(r.Cid, r.Permalink, chGetComment)
-			log.Println(cyan("Hello"), <-chGetComment)
+			go findAllCommentFromLink(r.Cid, r.Permalink, chGetComment)
+			log.Println(cyan("Comment"), <-chGetComment)
 		}
 		break
 	case "test":
@@ -186,7 +186,7 @@ func scrapingHTMLFromData(contentId int, link string, res *http.Response) {
 			edAttr = strings.ReplaceAll(strings.ReplaceAll(edAttr, "cmn.tool(this,", ""), "); return false;", "")
 			repsDate := postjung.CommentDate{}
 			json.Unmarshal([]byte(edAttr), &repsDate)
-			log.Println(cyan("reps"), repsDate, repsContent)
+			//log.Println(cyan("reps"), repsDate, repsContent)
 
 			insertReps := postjung.CommentContent{
 				Content:       emoji.RemoveAll(repsContent),
@@ -208,7 +208,7 @@ func scrapingHTMLFromData(contentId int, link string, res *http.Response) {
 
 		})
 
-		log.Println(cyan("comment"), author, comment, commentDate)
+		//log.Println(cyan("comment"), author, comment, commentDate)
 
 	})
 	defer func() {
@@ -219,7 +219,7 @@ func scrapingHTMLFromData(contentId int, link string, res *http.Response) {
 func getContentsFromTopic(ch <-chan scrapTopic, done chan bool, roomID string) {
 	for c := range ch {
 		c := c
-		log.Println(red("Link is: "), c)
+		//log.Println(red("Link is: "), c)
 		getContent := postjung.Scraping{colly.NewCollector()}
 		getContent.Scraping(c.link, "body", ".mainbox", func(_ int, elem *colly.HTMLElement) {
 			title := emoji.RemoveAll(elem.ChildText("body > div.mainbox > h1"))
@@ -245,19 +245,6 @@ func getContentsFromTopic(ch <-chan scrapTopic, done chan bool, roomID string) {
 			}
 			messageType := "post"
 			websiteType := "news"
-			//////////Log//////////
-			/*
-				log.Println(red("title"), title)
-				log.Println(red("author"), author)
-				log.Println(red("from"), allContent)
-				log.Println(red("img"), string(imgsJSON))
-				log.Println(cyan("tags"), tagsStore)
-				log.Println(red("publishDate"), publishDate)
-				log.Println(cyan("comment"), comments)
-				log.Println(cyan("messageType"), messageType)
-				log.Println(cyan("websiteType"), websiteType)
-				log.Println(cyan("roomID"), roomID)
-			*/
 			RID, _ := strconv.Atoi(roomID)
 			commentCount, err := strconv.Atoi(strings.TrimSpace(comments))
 			if err != nil {
@@ -280,7 +267,6 @@ func getContentsFromTopic(ch <-chan scrapTopic, done chan bool, roomID string) {
 				ImportDate:    time.Now(),
 				UpdateDate:    time.Now(),
 			}
-			// log.Println(cyan("content"), content)
 			result := db.Create(&content)
 			log.Println("result", result)
 		})
@@ -296,58 +282,48 @@ func loadInitPage(categoriesURL string, chk *bool) {
 	forumPage := postjung.Scraping{colly.NewCollector()}
 	forumPage.Scraping(categoriesURL, "body > div:nth-child(9)", "a.xnav", func(_ int, elem *colly.HTMLElement) {
 		if elem.Text == "next >" {
-			link := elem.Attr("href")
-			log.Println(red("current "), categoriesURL)
-			log.Println(red("next "), link)
+			//link := elem.Attr("href")
+			//log.Println(red("current "), categoriesURL)
+			//log.Println(red("next "), link)
 			findForumRoom(categoriesURL)
 			*chk = true
 		} else {
 			*chk = false
 		}
 	})
+
 }
 
 func findForumRoom(link string) {
 	forumRoom := postjung.Scraping{colly.NewCollector()}
 	forumRoom.Scraping(link, "body > div.splist", "a", func(_ int, elem *colly.HTMLElement) {
 		link := elem.Attr("href")
-		log.Println(green("link "), postjung.SiteConfig["site"]+link)
-		log.Println(green("room"), elem.Text)
+		//log.Println(green("link "), postjung.SiteConfig["site"]+link)
+		//log.Println(green("room"), elem.Text)
 		roomID := strings.Join(strings.Split(link, "-")[1:2], "")
-		log.Println(green("RoomID "), roomID)
-		i := 0
-		var chk bool
-		chk = true
-		for chk {
-			findAllTopicPage(postjung.SiteConfig["site"]+"board.php?id="+roomID+"&page="+strconv.Itoa(i), &chk)
-			i++
-		}
-		log.Println(green("Total "), strconv.Itoa(i))
+		//log.Println(green("RoomID "), roomID)
+		total := findAllTopicPage(postjung.SiteConfig["site"] + "board.php?id=" + roomID)
+
+		totalPage, _ := strconv.Atoi(total)
 		RID, err := strconv.Atoi(roomID)
 		if err != nil {
 			log.Fatal(red("error :"), err)
 		}
 		forum := postjung.Forum{
-			RoomName:  elem.Text,
-			TotalPage: i,
+			RoomName:  emoji.RemoveAll(elem.Text),
+			TotalPage: totalPage,
 			RoomId:    RID,
 		}
 		result := db.Create(&forum)
 		log.Println("result", result)
+
 	})
 }
 
-func findAllTopicPage(link string, chk *bool) {
+func findAllTopicPage(link string) string {
 	topicPage := postjung.Scraping{colly.NewCollector()}
-	topicPage.Scraping(link, "div.pagebar", "a.xnav", func(_ int, elem *colly.HTMLElement) {
-		if elem.Text == "next >" {
-			page := elem.Attr("href")
-			log.Println(red("Page of Topic "), postjung.SiteConfig["site"]+page[1:])
-			*chk = true
-		} else {
-			*chk = false
-		}
-	})
+	total := topicPage.ScrapingCount(link, "div.pagebar", "a")
+	return total
 }
 
 func findAllTopic(link string, ch chan<- scrapTopic) {
