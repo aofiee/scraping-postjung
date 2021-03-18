@@ -28,6 +28,8 @@ import (
 	"github.com/gocolly/colly"
 
 	"github.com/PuerkitoBio/goquery"
+	spinner "github.com/janeczku/go-spinner"
+	"github.com/joho/godotenv"
 	emoji "github.com/tmdvs/Go-Emoji-Utils"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -64,17 +66,25 @@ var (
 	dbError       error
 )
 
+func init() {
+
+	err := godotenv.Load(".env")
+
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+}
+
 func main() {
 	log.SetFlags(log.Ltime)
 	if arg() {
-		dsn := "root:helloworld@tcp(127.0.0.1:3306)/postjung?charset=utf8mb4&parseTime=True&loc=Local"
+		dsn := os.Getenv("DB_USER") + ":" + os.Getenv("DB_PASSWORD") + "@tcp(" + os.Getenv("DB_HOST") + ":" + os.Getenv("DB_PORT") + ")/postjung?charset=utf8mb4&parseTime=True&loc=Local"
 		db, dbError = gorm.Open(mysql.Open(dsn), &gorm.Config{})
 		if dbError != nil {
 			log.Fatal(dbError)
 		}
 		initWithCmd()
 	}
-
 }
 
 func initWithCmd() {
@@ -101,10 +111,12 @@ func initForums() {
 	i := 0
 	var chk bool
 	chk = true
+	s := spinner.StartNew("Retrieve data from webboard postjung...")
 	for chk {
 		loadInitPage(categoriesURL+strconv.Itoa(i), &chk)
 		i++
 	}
+	s.Stop()
 }
 
 func listAllRooms() {
@@ -122,6 +134,7 @@ func getAllTopicFrom(roomID string) {
 	if err := db.Where("room_id = ?", roomID).First(&forum).Error; err != nil {
 		log.Fatalln(err)
 	}
+	s := spinner.StartNew("Get topic from " + forum.RoomName)
 	for page := 0; page < forum.TotalPage; page++ {
 		chGettopicLinkFromPage := make(chan scrapTopic, chBuf)
 		chGettopicLinkFromPageIsDone := make(chan bool, chBuf)
@@ -129,19 +142,23 @@ func getAllTopicFrom(roomID string) {
 		go getContentsFromTopic(chGettopicLinkFromPage, chGettopicLinkFromPageIsDone, roomID)
 		log.Println(green("Done"), <-chGettopicLinkFromPageIsDone)
 	}
+	s.Stop()
 }
 
 func getAllCommentsFrom(roomID string) {
+	s := spinner.StartNew("Retrieve comment from topic")
 	var content []postjung.Content
 	if err := db.Find(&content).Where("comment_count > 0 AND room_id = ?", roomID).Error; err != nil {
 		log.Fatalln(err)
 	}
 	for _, r := range content {
 		chGetComment := make(chan scrapComment, chBuf)
-		log.Println(cyan("content "), r.Permalink)
+		//log.Println(cyan("content "), r.Permalink)
 		go findAllCommentFromLink(r.Cid, r.Permalink, chGetComment)
-		log.Println(cyan("Comment"), <-chGetComment)
+		//log.Println(cyan("Comment"), <-chGetComment)
+		<-chGetComment
 	}
+	s.Stop()
 }
 
 func findAllCommentFromLink(contentId int, link string, ch chan<- scrapComment) {
@@ -176,8 +193,11 @@ func parserHTMLCommentsFromData(contentId int, link string, res *http.Response) 
 		onclickAttr = strings.ReplaceAll(strings.ReplaceAll(onclickAttr, "cmn.tool(this,", ""), "); return false;", "")
 		commentDate := postjung.CommentDate{}
 		json.Unmarshal([]byte(onclickAttr), &commentDate)
+		comment = emoji.RemoveAll(comment)
+		var checkComment postjung.CommentContent
+		rs := db.Where("permalink = ? AND content = ? AND author = ?", link, comment, author).First(&checkComment)
 		insertComment := postjung.CommentContent{
-			Content:       emoji.RemoveAll(comment),
+			Content:       comment,
 			CommentDate:   commentDate.Unixtime,
 			Permalink:     link,
 			WebsiteDomain: postjung.SiteConfig["site"],
@@ -191,11 +211,19 @@ func parserHTMLCommentsFromData(contentId int, link string, res *http.Response) 
 			CreateDate:    time.Now(),
 			UpdateDate:    time.Now(),
 		}
-		result := db.Create(&insertComment)
-		log.Println("result", result)
+		if rs.RowsAffected == 0 {
+			if result := db.Create(&insertComment); result.Error != nil {
+				log.Println("result", result.Error)
+			}
+		} else {
+			checkComment.Content = comment
+			checkComment.UpdateDate = time.Now()
+			db.Save(&checkComment)
+		}
 		chReplyComments := make(chan string, chBuf)
 		go parserHTMLReplyCommentsFromData(chReplyComments, s, contentId, link)
-		log.Println("reply comment : ", <-chReplyComments)
+		// log.Println("reply comment : ", <-chReplyComments)
+		<-chReplyComments
 	})
 	defer func() {
 		res.Body.Close()
@@ -211,13 +239,17 @@ func parserHTMLReplyCommentsFromData(ch chan<- string, s *goquery.Selection, con
 		edAttr = strings.ReplaceAll(strings.ReplaceAll(edAttr, "cmn.tool(this,", ""), "); return false;", "")
 		repsDate := postjung.CommentDate{}
 		json.Unmarshal([]byte(edAttr), &repsDate)
+		repsContent = emoji.RemoveAll(repsContent)
+		uid := strconv.Itoa(repsDate.Userid)
+		var checkComment postjung.CommentContent
+		rs := db.Where("permalink = ? AND content = ? AND author = ?", link, repsContent, uid).First(&checkComment)
 		insertReps := postjung.CommentContent{
-			Content:       emoji.RemoveAll(repsContent),
+			Content:       repsContent,
 			CommentDate:   repsDate.Unixtime,
 			Permalink:     link,
 			WebsiteDomain: postjung.SiteConfig["site"],
 			CommentType:   "reps",
-			Author:        strconv.Itoa(repsDate.Userid),
+			Author:        uid,
 			ContentId:     contentId,
 			ViewCount:     0,
 			CommentCount:  0,
@@ -226,14 +258,22 @@ func parserHTMLReplyCommentsFromData(ch chan<- string, s *goquery.Selection, con
 			CreateDate:    time.Now(),
 			UpdateDate:    time.Now(),
 		}
-		result := db.Create(&insertReps)
-		log.Println("result", result)
-
+		if rs.RowsAffected == 0 {
+			if result := db.Create(&insertReps); result.Error != nil {
+				log.Println("result", result.Error)
+			}
+		} else {
+			checkComment.Content = repsContent
+			checkComment.ViewCount = 0
+			checkComment.UpdateDate = time.Now()
+			db.Save(&checkComment)
+		}
 	})
 	defer close(ch)
 }
 
 func getContentsFromTopic(ch <-chan scrapTopic, done chan bool, roomID string) {
+	stopPeriod := false
 	for c := range ch {
 		c := c
 		getContent := postjung.Scraping{colly.NewCollector()}
@@ -265,27 +305,64 @@ func getContentsFromTopic(ch <-chan scrapTopic, done chan bool, roomID string) {
 			if err != nil {
 				log.Println(red("error "), err)
 			}
-			content := postjung.Content{
-				RoomId:        RID,
-				Title:         title,
-				Content:       allContent,
-				CreateDate:    publishDate,
-				Permalink:     c.link,
-				WebsiteDomain: postjung.SiteConfig["site"],
-				MessageType:   messageType,
-				WebsiteType:   websiteType,
-				Author:        author,
-				ViewCount:     0,
-				CommentCount:  commentCount,
-				Tags:          tagsStore,
-				PictureUrls:   string(imgsJSON),
-				ImportDate:    time.Now(),
-				UpdateDate:    time.Now(),
-			}
-			result := db.Create(&content)
-			log.Println("result", result)
-		})
+			/* check create date */
+			splitDateTime := strings.Split(publishDate, "T")
+			Ymd := strings.Split(splitDateTime[0], "-")
+			year, month, day := time.Now().Date()
+			Y, _ := strconv.Atoi(Ymd[0])
+			m, _ := strconv.Atoi(Ymd[1])
+			d, _ := strconv.Atoi(Ymd[2])
 
+			t1 := Date(Y, m, d)
+			t2 := Date(year, int(month), day)
+			days := t2.Sub(t1).Hours() / 24
+
+			period, _ := strconv.ParseFloat(os.Getenv("PERIOD_TIME"), 64)
+			isGetAll, err := strconv.ParseBool(os.Getenv("GET_ALL_DATA"))
+			if err != nil {
+				log.Fatal(err)
+			}
+			/* check create date */
+			if isGetAll == true || days <= period {
+				var findContent postjung.Content
+				rs := db.First(&findContent, "permalink = ?", c.link)
+				content := postjung.Content{
+					RoomId:        RID,
+					Title:         title,
+					Content:       allContent,
+					CreateDate:    publishDate,
+					Permalink:     c.link,
+					WebsiteDomain: postjung.SiteConfig["site"],
+					MessageType:   messageType,
+					WebsiteType:   websiteType,
+					Author:        author,
+					ViewCount:     0,
+					CommentCount:  commentCount,
+					Tags:          tagsStore,
+					PictureUrls:   string(imgsJSON),
+					ImportDate:    time.Now(),
+					UpdateDate:    time.Now(),
+				}
+				if rs.RowsAffected == 0 {
+					if result := db.Create(&content); result.Error != nil {
+						log.Println("result", result.Error)
+					}
+				} else {
+					findContent.Title = title
+					findContent.Content = allContent
+					findContent.CommentCount = commentCount
+					db.Save(&findContent)
+				}
+			} else {
+				log.Println(cyan("Day"), days)
+				log.Println(cyan("c.link"), c.link)
+				stopPeriod = true
+				return
+			}
+		})
+		if stopPeriod {
+			break
+		}
 	}
 	defer func() {
 		done <- true
@@ -303,7 +380,6 @@ func loadInitPage(categoriesURL string, chk *bool) {
 			*chk = false
 		}
 	})
-
 }
 
 func findForumRoom(link string) {
@@ -317,14 +393,18 @@ func findForumRoom(link string) {
 		if err != nil {
 			log.Fatal(red("error :"), err)
 		}
+		var findForum postjung.Forum
+		rs := db.First(&findForum, "room_id = ?", RID)
 		forum := postjung.Forum{
 			RoomName:  emoji.RemoveAll(elem.Text),
 			TotalPage: totalPage,
 			RoomId:    RID,
 		}
-		result := db.Create(&forum)
-		log.Println("result", result)
-
+		if rs.RowsAffected == 0 {
+			db.Create(&forum)
+		} else {
+			db.Model(&forum).Where("room_id = ?", RID).Update("total_page", totalPage)
+		}
 	})
 }
 
@@ -351,7 +431,7 @@ func findAllTopic(link string, ch chan<- scrapTopic) {
 			comment: comment,
 		}
 		ch <- pack
-		log.Println(green(elem.Text) + " " + l)
+		//log.Println(green(elem.Text) + " " + l)
 	})
 	defer close(ch)
 }
@@ -361,4 +441,8 @@ func arg() bool {
 		os.Exit(1)
 	}
 	return true
+}
+
+func Date(year, month, day int) time.Time {
+	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
 }
