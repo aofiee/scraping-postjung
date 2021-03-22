@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -134,13 +135,17 @@ func getAllTopicFrom(roomID string) {
 	if err := db.Where("room_id = ?", roomID).First(&forum).Error; err != nil {
 		log.Fatalln(err)
 	}
+	chk := false
 	s := spinner.StartNew("Get topic from " + forum.RoomName)
 	for page := 0; page < forum.TotalPage; page++ {
 		chGettopicLinkFromPage := make(chan scrapTopic, chBuf)
 		chGettopicLinkFromPageIsDone := make(chan bool, chBuf)
-		go findAllTopic("https://board.postjung.com/board.php?id="+roomID+"&page="+strconv.Itoa(page), chGettopicLinkFromPage)
+		go findAllTopic("https://board.postjung.com/board.php?id="+roomID+"&page="+strconv.Itoa(page), chGettopicLinkFromPage, &chk)
 		go getContentsFromTopic(chGettopicLinkFromPage, chGettopicLinkFromPageIsDone, roomID)
 		log.Println(green("Done"), <-chGettopicLinkFromPageIsDone)
+		if chk {
+			break
+		}
 	}
 	s.Stop()
 }
@@ -414,7 +419,7 @@ func findAllTopicPage(link string) string {
 	return total
 }
 
-func findAllTopic(link string, ch chan<- scrapTopic) {
+func findAllTopic(link string, ch chan<- scrapTopic, chk *bool) {
 	topic := postjung.Scraping{colly.NewCollector()}
 	page := link[len(link)-1:]
 	var selectorTarget string
@@ -425,6 +430,24 @@ func findAllTopic(link string, ch chan<- scrapTopic) {
 	topic.Scraping(link, selectorTarget, "a", func(_ int, elem *colly.HTMLElement) {
 		l := elem.Attr("href")
 		comment := elem.ChildText("span > span.xinfo")
+		/* check create date */
+		isGetAll, err := strconv.ParseBool(os.Getenv("GET_ALL_DATA"))
+		if err != nil {
+			log.Fatal(err)
+		}
+		if isGetAll == false {
+			//log.Println("comment", comment)
+			if comment != "" {
+				period := strings.Split(strings.ReplaceAll(strings.ReplaceAll(comment, "(", ""), ")", ""), ",")
+				p := strings.TrimSpace(period[1])
+				log.Println(cyan("period[1]"), p)
+				matched, _ := regexp.MatchString(`[1-12]M`, p)
+				if matched {
+					log.Println("exit 0")
+					*chk = true
+				}
+			}
+		}
 		pack := scrapTopic{
 			text:    elem.Text,
 			link:    postjung.SiteConfig["site"] + l,
