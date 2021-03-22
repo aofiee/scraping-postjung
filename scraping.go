@@ -278,7 +278,6 @@ func parserHTMLReplyCommentsFromData(ch chan<- string, s *goquery.Selection, con
 }
 
 func getContentsFromTopic(ch <-chan scrapTopic, done chan bool, roomID string) {
-	stopPeriod := false
 	for c := range ch {
 		c := c
 		getContent := postjung.Scraping{colly.NewCollector()}
@@ -361,13 +360,9 @@ func getContentsFromTopic(ch <-chan scrapTopic, done chan bool, roomID string) {
 			} else {
 				log.Println(cyan("Day"), days)
 				log.Println(cyan("c.link"), c.link)
-				stopPeriod = true
 				return
 			}
 		})
-		if stopPeriod {
-			break
-		}
 	}
 	defer func() {
 		done <- true
